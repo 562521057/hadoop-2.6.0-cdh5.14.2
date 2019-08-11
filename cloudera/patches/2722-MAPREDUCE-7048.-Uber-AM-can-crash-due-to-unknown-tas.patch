@@ -1,0 +1,167 @@
+From fde1acfa07c091390c3e5ce1948968c2650f73fd Mon Sep 17 00:00:00 2001
+From: Jason Lowe <jlowe@apache.org>
+Date: Mon, 12 Feb 2018 14:30:42 -0600
+Subject: [PATCH 2722/2748] MAPREDUCE-7048. Uber AM can crash due to unknown
+ task in statusUpdate. Contributed by Peter Bacsko
+
+(cherry picked from commit 08feac4c83939f60289f8540d72ffcabb7852e2a)
+
+Change-Id: I59f7cbb167019c3a3678a4b374d2c726bd6b76ab
+---
+ .../main/java/org/apache/hadoop/mapred/Task.java   |   17 ++--
+ .../java/org/apache/hadoop/mapred/TestTask.java    |   84 ++++++++++++++++++++
+ 2 files changed, 96 insertions(+), 5 deletions(-)
+ create mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestTask.java
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java
+index ffb79a9..afdaa76 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java
+@@ -65,6 +65,7 @@
+ import org.apache.hadoop.mapreduce.util.MRJobConfUtil;
+ import org.apache.hadoop.yarn.util.ResourceCalculatorProcessTree;
+ import org.apache.hadoop.net.NetUtils;
++import org.apache.hadoop.util.ExitUtil;
+ import org.apache.hadoop.util.Progress;
+ import org.apache.hadoop.util.Progressable;
+ import org.apache.hadoop.util.ReflectionUtils;
+@@ -194,6 +195,7 @@ static synchronized String getOutputName(int partition) {
+   protected SecretKey tokenSecret;
+   protected SecretKey shuffleSecret;
+   protected GcTimeUpdater gcUpdater;
++  private boolean uberized = false;
+ 
+   ////////////////////////////////////////////
+   // Constructors
+@@ -760,9 +762,6 @@ public void run() {
+       long taskProgressInterval = MRJobConfUtil.
+           getTaskProgressReportInterval(conf);
+ 
+-      boolean uberized = conf.getBoolean("mapreduce.task.uberized",
+-          false);
+-
+       while (!taskDone.get()) {
+         synchronized (lock) {
+           done = false;
+@@ -1127,11 +1126,17 @@ boolean isCommitRequired() throws IOException {
+   public void statusUpdate(TaskUmbilicalProtocol umbilical) 
+   throws IOException {
+     int retries = MAX_RETRIES;
++
+     while (true) {
+       try {
+         if (!umbilical.statusUpdate(getTaskID(), taskStatus)) {
+-          LOG.warn("Parent died.  Exiting "+taskId);
+-          System.exit(66);
++          if (uberized) {
++            LOG.warn("Task no longer available: " + taskId);
++            break;
++          } else {
++            LOG.warn("Parent died.  Exiting " + taskId);
++            ExitUtil.terminate(66);
++          }
+         }
+         taskStatus.clearStatus();
+         return;
+@@ -1344,6 +1349,8 @@ public void setConf(Configuration conf) {
+         NetUtils.addStaticResolution(name, resolvedName);
+       }
+     }
++
++    uberized = conf.getBoolean("mapreduce.task.uberized", false);
+   }
+ 
+   public Configuration getConf() {
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestTask.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestTask.java
+new file mode 100644
+index 0000000..6bf0601
+--- /dev/null
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestTask.java
+@@ -0,0 +1,84 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.mapred;
++
++import static org.mockito.Matchers.any;
++import static org.mockito.Mockito.when;
++
++import java.io.IOException;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.util.ExitUtil;
++import org.apache.hadoop.util.ExitUtil.ExitException;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.mockito.Mock;
++import org.mockito.runners.MockitoJUnitRunner;
++
++@RunWith(MockitoJUnitRunner.class)
++public class TestTask {
++  @Mock
++  private TaskUmbilicalProtocol umbilical;
++
++  private Task task;
++
++  @Before
++  public void setup() {
++    task = new StubTask();
++    ExitUtil.disableSystemExit();
++  }
++
++  @Test
++  public void testStatusUpdateDoesNotExitInUberMode() throws Exception {
++    setupTest(true);
++
++    task.statusUpdate(umbilical);
++  }
++
++  @Test(expected = ExitException.class)
++  public void testStatusUpdateExitsInNonUberMode() throws Exception {
++    setupTest(false);
++
++    task.statusUpdate(umbilical);
++  }
++
++  private void setupTest(boolean uberized)
++      throws IOException, InterruptedException {
++    Configuration conf = new Configuration(false);
++    conf.setBoolean("mapreduce.task.uberized", uberized);
++    task.setConf(conf);
++    // (false, true) to avoid possible infinite loop
++    when(umbilical.statusUpdate(any(TaskAttemptID.class),
++        any(TaskStatus.class))).thenReturn(false, true);
++  }
++
++  public class StubTask extends Task {
++    @Override
++    public void run(JobConf job, TaskUmbilicalProtocol umbilical)
++        throws IOException, ClassNotFoundException, InterruptedException {
++      // nop
++    }
++
++    @Override
++    public boolean isMapTask() {
++      return false;
++    }
++  }
++}
+-- 
+1.7.9.5
+

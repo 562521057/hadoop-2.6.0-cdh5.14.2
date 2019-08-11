@@ -1,0 +1,63 @@
+From e7b9fd1b1020e6b77257c404482c1f6aca03b605 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@apache.org>
+Date: Fri, 1 Dec 2017 12:18:13 -0800
+Subject: [PATCH 2709/2748] YARN-4813.
+ TestRMWebServicesDelegationTokenAuthentication.testDoAs
+ fails intermittently (grepas via rkanter)
+
+Change-Id: I6057acdbaf7212ebf62a652046b3340c9ae89717
+(cherry picked from commit 1c708e297013a41f99fd1e15aa8a3494961e556a)
+---
+ ...RMWebServicesDelegationTokenAuthentication.java |   15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/TestRMWebServicesDelegationTokenAuthentication.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/TestRMWebServicesDelegationTokenAuthentication.java
+index 36e24ec..019ec60 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/TestRMWebServicesDelegationTokenAuthentication.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/TestRMWebServicesDelegationTokenAuthentication.java
+@@ -75,6 +75,8 @@
+     TestRMWebServicesDelegationTokenAuthentication.class.getName() + "-root");
+   private static File httpSpnegoKeytabFile = new File(
+     KerberosTestUtils.getKeytabFile());
++  private static final String SUN_SECURITY_KRB5_RCACHE_KEY =
++      "sun.security.krb5.rcache";
+ 
+   private static String httpSpnegoPrincipal = KerberosTestUtils
+     .getServerPrincipal();
+@@ -82,7 +84,7 @@
+   private static boolean miniKDCStarted = false;
+   private static MiniKdc testMiniKDC;
+   private static MockRM rm;
+-
++  private static String sunSecurityKrb5RcacheValue;
+ 
+   String delegationTokenHeader;
+ 
+@@ -97,6 +99,11 @@
+   @BeforeClass
+   public static void setUp() {
+     try {
++      // Disabling kerberos replay cache to avoid "Request is a replay" errors
++      // caused by frequent webservice calls
++      sunSecurityKrb5RcacheValue =
++          System.getProperty(SUN_SECURITY_KRB5_RCACHE_KEY);
++      System.setProperty(SUN_SECURITY_KRB5_RCACHE_KEY, "none");
+       testMiniKDC = new MiniKdc(MiniKdc.createConf(), testRootDir);
+       setupKDC();
+       setupAndStartRM();
+@@ -113,6 +120,12 @@ public static void tearDown() {
+     if (rm != null) {
+       rm.stop();
+     }
++    if (sunSecurityKrb5RcacheValue == null) {
++      System.clearProperty(SUN_SECURITY_KRB5_RCACHE_KEY);
++    } else {
++      System.setProperty(SUN_SECURITY_KRB5_RCACHE_KEY,
++          sunSecurityKrb5RcacheValue);
++    }
+   }
+ 
+   @Parameterized.Parameters
+-- 
+1.7.9.5
+

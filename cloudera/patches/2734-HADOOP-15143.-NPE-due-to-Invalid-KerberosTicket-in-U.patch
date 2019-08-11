@@ -1,0 +1,37 @@
+From 4ed1c91ec3b330ef3fe85b0d7e973fc8bf1029fb Mon Sep 17 00:00:00 2001
+From: Jitendra Pandey <jitendra@apache.org>
+Date: Wed, 27 Dec 2017 23:17:07 -0800
+Subject: [PATCH 2734/2748] HADOOP-15143. NPE due to Invalid KerberosTicket in
+ UGI. Contributed by Mukul Kumar Singh.
+
+Ref.: CDH-65686
+
+(cherry picked from commit d31c9d8c495794a803fb20729b5ed6b374e23eb4)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestFixKerberosTicketOrder.java
+
+Change-Id: I9503d8e78a0252fc06fc678ad931603580bd2af6
+---
+ .../hadoop/security/UserGroupInformation.java      |    5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/UserGroupInformation.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/UserGroupInformation.java
+index a5e6cd2..4ca47eb 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/UserGroupInformation.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/UserGroupInformation.java
+@@ -1205,7 +1205,10 @@ private void fixKerberosTicketOrder() {
+         Object cred = iter.next();
+         if (cred instanceof KerberosTicket) {
+           KerberosTicket ticket = (KerberosTicket) cred;
+-          if (!ticket.getServer().getName().startsWith("krbtgt")) {
++          if (ticket.isDestroyed() || ticket.getServer() == null) {
++            LOG.warn("Ticket is already destroyed, remove it.");
++            iter.remove();
++          } else if (!ticket.getServer().getName().startsWith("krbtgt")) {
+             LOG.warn(
+                 "The first kerberos ticket is not TGT"
+                     + "(the server principal is {}), remove and destroy it.",
+-- 
+1.7.9.5
+
