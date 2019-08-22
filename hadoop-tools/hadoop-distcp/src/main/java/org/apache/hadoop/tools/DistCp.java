@@ -99,7 +99,7 @@ public class DistCp extends Configured implements Tool {
    * @param configuration The Hadoop configuration against which the Copy-mapper must run.
    * @throws Exception, on failure.
    */
-  public DistCp(Configuration configuration, DistCpOptions inputOptions) throws Exception {
+  public DistCp(Configuration configuration, DistCpOptions inputOptions) throws Exception {//构造函数加载配置文件，失败引发异常
     Configuration config = new Configuration(configuration);
     config.addResource(DISTCP_DEFAULT_XML);
     setConf(config);
