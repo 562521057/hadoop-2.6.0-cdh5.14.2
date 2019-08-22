@@ -87,7 +87,7 @@ public class DistCp extends Configured implements Tool {
       }
     } else {
       // When no "-diff" or "-rdiff" is passed, create copyListing
-      // in regular way.
+      // in regular way.//常规方式执行拷贝
       createInputFileListing(job);
     }
   }
